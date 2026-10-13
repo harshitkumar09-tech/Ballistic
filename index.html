@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Offline Ballistics Map – India</title>
+<style>
+:root{--bg:#0c110b;--panel:#172015;--ink:#e6eadf;--mut:#8f9b86;--acc:#c9b458;--line:#2b3828;--bad:#e0775f}
+*{box-sizing:border-box}
+body{margin:0;height:100vh;display:flex;font:14px system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
+aside{width:350px;flex:none;overflow-y:auto;padding:14px;background:var(--panel);border-right:1px solid var(--line)}
+main{flex:1;position:relative;min-width:0}
+canvas#map{width:100%;height:100%;display:block;cursor:crosshair;touch-action:none}
+h1{font-size:17px;margin:0 0 2px;color:var(--acc)}h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:16px 0 6px}
+.mut{color:var(--mut)}.warn{color:var(--bad);margin:8px 0}small{font-size:12px}
+label{display:block;font-size:12px;color:var(--mut)}
+input,select{width:100%;padding:6px 8px;background:#0f160e;color:var(--ink);border:1px solid var(--line);border-radius:5px;font:inherit}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.g3{display:grid;grid-template-columns:1fr 1fr .7fr;gap:6px}
+.modes{display:flex;gap:6px;margin-bottom:8px}.modes label{flex:1;display:flex;gap:6px;align-items:center;padding:6px 8px;border:1px solid var(--line);border-radius:5px;cursor:pointer;color:var(--ink)}
+.res{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line)}.res b{color:var(--acc);font-weight:600}
+button{background:#22301f;color:var(--ink);border:1px solid var(--line);border-radius:5px;padding:6px 10px;font:inherit;cursor:pointer}button:hover{border-color:var(--acc)}
+.zoom{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:6px}
+.bar{position:absolute;left:12px;top:12px;display:flex;gap:6px;width:min(470px,calc(100% - 70px))}.bar input{flex:1}.bar select{width:130px}.bar input,.bar select{box-shadow:0 2px 8px #0008}.zoom button{width:34px;height:34px;font-size:18px}
+.hud{position:absolute;left:12px;bottom:10px;background:#0c110bcc;padding:4px 8px;border-radius:5px;font-size:12px;color:var(--mut)}
+#chart{width:100%;height:150px;background:#0f160e;border:1px solid var(--line);border-radius:5px;margin-top:10px}
+@media(max-width:800px){body{flex-direction:column-reverse}aside{width:100%;height:50vh;border:0;border-top:1px solid var(--line)}}
+</style></head><body>
+<aside>
+<h1>Ballistics Map · India</h1>
+<small class="mut">Offline simulation tool. Idealised physics by default; optional approximate drag below.</small>
+<label style="margin-top:8px">Units</label>
+<select id="unit"><option value="metric">Metric — m, m/s</option><option value="imperial">Imperial — ft, ft/s</option></select>
+
+<h2>Weapon</h2>
+<select id="cat" style="margin-bottom:6px"></select>
+<input id="wname" list="wlist" placeholder="Type weapon name: AK-47, M777, INSAS, Glock…" autocomplete="off">
+<datalist id="wlist"></datalist>
+<small id="wstat" class="mut"></small>
+<button id="wsave" style="display:none;margin-top:6px;width:100%">Save to my weapons</button>
+<div class="g2" style="margin-top:8px">
+<div><label id="lblMv">Muzzle velocity (m/s)</label><input id="mv" type="number" min="1"></div>
+<div><label id="lblMr">Rated / effective range (m)</label><input id="mr" type="number" min="0"></div></div>
+
+<h2>Points <small>(click map to set)</small></h2>
+<div class="modes"><label><input type="radio" name="mode" value="s" checked style="width:auto">Shooter</label>
+<label><input type="radio" name="mode" value="t" style="width:auto">Target</label></div>
+<label id="lblS">Shooter lat / lon / alt (m)</label>
+<div class="g3"><input id="slat" type="number" step="any"><input id="slon" type="number" step="any"><input id="salt" type="number" value="0"></div>
+<label id="lblT" style="margin-top:8px">Target lat / lon / alt (m)</label>
+<div class="g3"><input id="tlat" type="number" step="any"><input id="tlon" type="number" step="any"><input id="talt" type="number" value="0"></div>
+<div class="g2" style="margin-top:8px">
+<button id="geoBtn" type="button">📍 My location → shooter</button>
+<button id="altBtn" type="button">⛰ Fetch altitudes (online)</button></div>
+<div class="g2" style="margin-top:8px">
+<div><label>Trajectory</label><select id="arc"><option value="low">Low (flat)</option><option value="high">High (lofted)</option></select></div>
+<div style="align-self:end"><button id="clear" style="width:100%">Clear points</button></div></div>
+
+<h2>Environment <small>(optional)</small></h2>
+<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="drag" style="width:auto">Include approximate air drag</label>
+<div class="g2" style="margin-top:6px">
+<div><label id="lblWind">Wind along path (m/s, + tailwind)</label><input id="wind" type="number" value="0" step="any"></div>
+<div><label>Drag coeff. k (editable)</label><input id="kcoef" type="number" step="any" min="0"></div></div>
+<small class="mut">Illustrative category-based drag only, not measured ballistic data; crosswind drift isn't modelled. Leave unchecked for the exact drag-free formulas.</small>
+
+<h2>Solution</h2>
+<div id="out"></div>
+<canvas id="chart" width="320" height="150"></canvas>
+<button id="saveHist" style="width:100%;margin-top:8px">💾 Save this calculation</button>
+
+<h2>History</h2>
+<div id="hist"><small class="mut">Saved calculations appear here.</small></div>
+
+<h2>Map layers</h2><small class="mut">Every area you view online is cached automatically and shows again with no internet. To prepare a region in advance, zoom to it, pick a layer and press the button (up to 1500 tiles per press).</small>
+<button id="dl" style="width:100%;margin:8px 0">Save visible area for offline use</button>
+<small class="mut" id="cnt"></small><br><br>
+<small class="mut">Put raster tiles in <code>./tiles/{z}/{x}/{y}.png</code> (XYZ), e.g. <code>mb-util india.mbtiles tiles</code>, then serve this folder with <code>npx serve</code>. Without tiles you still get a graticule and reference cities. Map zoom 3–12.</small>
+</aside>
+<main>
+<canvas id="map"></canvas>
+<div class="bar"><input id="q" placeholder="Search place, press Enter (needs internet)"><select id="layer"><option value="esri_st">Streets</option><option value="esri_topo">Terrain</option><option value="esri_img">Satellite</option><option value="osm">OpenStreetMap (use http)</option><option value="local">Offline tiles</option></select></div>
+<div class="zoom"><button id="zi">+</button><button id="zo">−</button></div>
+<div class="hud" id="hud">–</div>
+</main>
+
+<script>
+// ---------- Data ----------
+const WEAPONS=[
+ {n:"Generic 9mm pistol",v:360,r:50},
+ {n:"Generic 5.56 rifle",v:900,r:600},
+ {n:"Generic 7.62 rifle",v:830,r:800},
+ {n:"Generic .338 precision rifle",v:900,r:1500},
+ {n:"Generic 81mm mortar",v:300,r:5000},
+ {n:"Generic 105mm field gun",v:600,r:11000},
+ {n:"Generic 155mm howitzer",v:800,r:30000},
+ // pistols
+ {n:"Glock 17",c:"pistol",k:"9×19mm",o:"Austria",v:375,r:50,a:["glock","g17"]},
+ {n:"Beretta 92FS",c:"pistol",k:"9×19mm",o:"Italy",v:380,r:50,a:["m9","beretta"]},
+ {n:"Colt M1911A1",c:"pistol",k:".45 ACP",o:"USA",v:253,r:50,a:["1911","colt"]},
+ {n:"Browning Hi-Power",c:"pistol",k:"9×19mm",o:"Belgium",v:350,r:50,a:["hi power","hp"]},
+ {n:"Pistol Auto 9mm 1A",c:"pistol",k:"9×19mm",o:"India",v:350,r:50,a:["1a pistol"]},
+ {n:"Makarov PM",c:"pistol",k:"9×18mm",o:"USSR",v:315,r:50,a:["makarov"]},
+ // submachine guns
+ {n:"MP5",c:"smg",k:"9×19mm",o:"Germany",v:400,r:200,a:["mp5a3","hk mp5"]},
+ {n:"Uzi",c:"smg",k:"9×19mm",o:"Israel",v:400,r:200,a:[]},
+ {n:"AKS-74U",c:"smg",k:"5.45×39mm",o:"USSR",v:735,r:300,a:["aks74u"]},
+ {n:"FN P90",c:"smg",k:"5.7×28mm",o:"Belgium",v:715,r:200,a:["p90"]},
+ // rifles
+ {n:"AK-47",c:"rifle",k:"7.62×39mm",o:"USSR",v:715,r:400,a:["ak47","kalashnikov"]},
+ {n:"AKM",c:"rifle",k:"7.62×39mm",o:"USSR",v:715,r:400,a:[]},
+ {n:"AK-74",c:"rifle",k:"5.45×39mm",o:"USSR",v:900,r:500,a:["ak74"]},
+ {n:"AK-203",c:"rifle",k:"7.62×39mm",o:"India/Russia",v:715,r:400,a:["ak203"]},
+ {n:"INSAS",c:"rifle",k:"5.56×45mm",o:"India",v:915,r:400,a:["insas rifle"]},
+ {n:"M16A4",c:"rifle",k:"5.56×45mm",o:"USA",v:948,r:550,a:["m16","ar15"]},
+ {n:"M4A1",c:"rifle",k:"5.56×45mm",o:"USA",v:910,r:500,a:["m4","m4 carbine"]},
+ {n:"FN FAL",c:"rifle",k:"7.62×51mm",o:"Belgium",v:840,r:600,a:["fal","l1a1"]},
+ {n:"SLR 1A",c:"rifle",k:"7.62×51mm",o:"India",v:840,r:600,a:["slr","self loading rifle"]},
+ {n:"Heckler & Koch G3",c:"rifle",k:"7.62×51mm",o:"Germany",v:800,r:500,a:["g3"]},
+ {n:"Steyr AUG A1",c:"rifle",k:"5.56×45mm",o:"Austria",v:970,r:500,a:["aug"]},
+ {n:"IMI Galil ARM",c:"rifle",k:"5.56×45mm",o:"Israel",v:950,r:500,a:["galil"]},
+ {n:"IWI Tavor TAR-21",c:"rifle",k:"5.56×45mm",o:"Israel",v:900,r:500,a:["tavor","tar21","x95"]},
+ {n:"Mauser Kar98k",c:"rifle",k:"7.92×57mm",o:"Germany",v:760,r:500,a:["kar98","k98"]},
+ {n:"Lee-Enfield SMLE",c:"rifle",k:".303 British",o:"UK",v:744,r:500,a:["smle","lee enfield","303"]},
+ {n:"Mosin-Nagant M91/30",c:"rifle",k:"7.62×54mmR",o:"Russia",v:810,r:500,a:["mosin"]},
+ // sniper / anti-materiel
+ {n:"SVD Dragunov",c:"sniper",k:"7.62×54mmR",o:"USSR",v:830,r:800,a:["svd","dragunov"]},
+ {n:"Remington M24",c:"sniper",k:"7.62×51mm",o:"USA",v:790,r:800,a:["m24"]},
+ {n:"Barrett M82A1",c:"sniper",k:".50 BMG",o:"USA",v:853,r:1800,a:["m82","barrett"]},
+ // machine guns
+ {n:"INSAS LMG",c:"mg",k:"5.56×45mm",o:"India",v:915,r:700,a:["insas light machine gun"]},
+ {n:"M249 SAW",c:"mg",k:"5.56×45mm",o:"Belgium/USA",v:915,r:800,a:["minimi","m249"]},
+ {n:"PKM",c:"mg",k:"7.62×54mmR",o:"USSR",v:825,r:1000,a:["pk"]},
+ {n:"M60",c:"mg",k:"7.62×51mm",o:"USA",v:853,r:1100,a:[]},
+ {n:"FN MAG",c:"mg",k:"7.62×51mm",o:"Belgium",v:840,r:1800,a:["mag 58","mmg"]},
+ {n:"M2 Browning .50",c:"hmg",k:".50 BMG",o:"USA",v:890,r:1800,a:["m2","browning","50 cal"]},
+ {n:"DShK",c:"hmg",k:"12.7×108mm",o:"USSR",v:850,r:1500,a:["dshka"]},
+ {n:"NSV",c:"hmg",k:"12.7×108mm",o:"USSR",v:845,r:1500,a:[]},
+ {n:"KPV",c:"hmg",k:"14.5×114mm",o:"USSR",v:976,r:2000,a:[]},
+ // grenade launchers
+ {n:"M203",c:"grenade launcher",k:"40×46mm",o:"USA",v:76,r:350,a:["ubgl"]},
+ {n:"Mk 19",c:"grenade launcher",k:"40×53mm",o:"USA",v:241,r:1500,a:["mk19"]},
+ // mortars
+ {n:"Generic 60mm mortar",c:"mortar",k:"60mm",o:"generic",v:200,r:3500,a:[]},
+ {n:"Generic 120mm mortar",c:"mortar",k:"120mm",o:"generic",v:330,r:7000,a:[]},
+ // artillery
+ {n:"M101 105mm",c:"artillery",k:"105mm",o:"USA",v:472,r:11270,a:["m101"]},
+ {n:"M119 105mm",c:"artillery",k:"105mm",o:"USA/UK",v:494,r:14300,a:["m119"]},
+ {n:"D-30 122mm",c:"artillery",k:"122mm",o:"USSR",v:690,r:15300,a:["d30"]},
+ {n:"M-46 130mm",c:"artillery",k:"130mm",o:"USSR",v:930,r:27500,a:["m46"]},
+ {n:"M198 155mm",c:"artillery",k:"155mm",o:"USA",v:827,r:22400,a:["m198"]},
+ {n:"M777 155mm",c:"artillery",k:"155mm",o:"USA/UK",v:827,r:24700,a:["m777","ultralight howitzer"]},
+ {n:"FH-77B 155mm",c:"artillery",k:"155mm",o:"Sweden",v:774,r:24000,a:["fh77","bofors howitzer"]},
+ {n:"PzH 2000 155mm",c:"artillery",k:"155mm",o:"Germany",v:945,r:30000,a:["pzh2000"]},
+ // naval / anti-aircraft guns
+ {n:"Bofors L/70 40mm",c:"naval/AA gun",k:"40×364mmR",o:"Sweden",v:1025,r:4000,a:["bofors 40mm","l70"]},
+ {n:"ZU-23-2",c:"naval/AA gun",k:"23×152mmB",o:"USSR",v:970,r:2500,a:["zu23"]},
+ {n:"OTO Melara 76/62",c:"naval/AA gun",k:"76mm",o:"Italy",v:925,r:16000,a:["oto melara","76mm compact"]},
+ {n:"AK-630",c:"naval/AA gun",k:"30×165mm",o:"USSR",v:900,r:4000,a:["ak630"]},
+ {n:"Phalanx CIWS",c:"naval/AA gun",k:"20×102mm",o:"USA",v:1100,r:1500,a:["phalanx","mk 15"]},
+ // tank guns
+ {n:"Rheinmetall 120mm L/44",c:"tank gun",k:"120mm",o:"Germany",v:1650,r:4000,a:["l44","120mm tank gun"]},
+ {n:"2A46 125mm (APFSDS)",c:"tank gun",k:"125mm",o:"USSR/Russia",v:1700,r:3000,a:["2a46","125mm tank gun"]},
+ // sporting / historical
+ {n:".22 LR rifle",c:"sporting",k:".22 LR",o:"generic",v:330,r:150,a:["22lr"]},
+ {n:"12-gauge shotgun (slug)",c:"sporting",k:"12 ga",o:"generic",v:450,r:100,a:["shotgun"]},
+ {n:"Napoleon 12-pounder",c:"historical",k:"12 lb",o:"France",v:439,r:1600,a:["napoleon cannon"]},
+ {n:"Brown Bess musket",c:"historical",k:".75",o:"UK",v:300,r:100,a:["brown bess"]},
+ {n:"English longbow",c:"historical",k:"arrow",o:"England",v:50,r:250,a:["longbow"]}];
+const CITIES=[["New Delhi",28.6139,77.209],["Mumbai",19.076,72.8777],["Kolkata",22.5726,88.3639],["Chennai",13.0827,80.2707],["Bengaluru",12.9716,77.5946],["Hyderabad",17.385,78.4867],["Leh",34.1526,77.5771],["Srinagar",34.0837,74.7973],["Jaisalmer",26.9157,70.9083],["Guwahati",26.1445,91.7362],["Port Blair",11.6234,92.7265]];
+
+// ---------- Physics ----------
+const G=9.80665,R=6371008.8,rad=d=>d*Math.PI/180,deg=r=>r*180/Math.PI;
+function dist(a,b){const p1=rad(a.lat),p2=rad(b.lat),dp=p2-p1,dl=rad(b.lon-a.lon);
+ const x=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(x)))}
+function bearing(a,b){const p1=rad(a.lat),p2=rad(b.lat),dl=rad(b.lon-a.lon);
+ return(deg(Math.atan2(Math.sin(dl)*Math.cos(p2),Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl)))+360)%360}
+function solveEl(v,d,h){const k=G*d*d/(2*v*v),disc=d*d-4*k*(h+k);if(disc<0)return null;const s=Math.sqrt(disc);
+ return{low:deg(Math.atan((d-s)/(2*k))),high:deg(Math.atan((d+s)/(2*k)))}}
+function prof(v,th,d){const t=rad(th),vx=v*Math.cos(t),vy=v*Math.sin(t),tof=d/vx;
+ return{tof,apex:vy*vy/(2*G),imp:Math.hypot(vx,vy-G*tof)}}
+// Approximate quadratic-drag model (illustrative k, 1/m) with optional constant wind along the firing line.
+const CAT_K={pistol:5e-4,smg:4e-4,rifle:1.5e-4,sniper:8e-5,mg:1.5e-4,hmg:1e-4,"grenade launcher":6e-4,mortar:4e-4,
+ artillery:3e-5,"naval/AA gun":8e-5,"tank gun":2e-5,sporting:4e-4,historical:1.2e-3,custom:1.5e-4,generic:1.5e-4};
+function dragAcc(vx,vy,k,wind){const rx=vx-wind,ry=vy,sp=Math.hypot(rx,ry);return{ax:-k*sp*rx,ay:-G-k*sp*ry}}
+function dragPath(v,thDeg,k,wind,steps=3000,dt=0.02){
+ const th=rad(thDeg);let x=0,y=0,vx=v*Math.cos(th),vy=v*Math.sin(th),t=0;const pts=[{x,y}];
+ for(let i=0;i<steps;i++){
+  const a1=dragAcc(vx,vy,k,wind),a2=dragAcc(vx+a1.ax*dt/2,vy+a1.ay*dt/2,k,wind),
+   a3=dragAcc(vx+a2.ax*dt/2,vy+a2.ay*dt/2,k,wind),a4=dragAcc(vx+a3.ax*dt,vy+a3.ay*dt,k,wind);
+  vx+=(a1.ax+2*a2.ax+2*a3.ax+a4.ax)/6*dt;vy+=(a1.ay+2*a2.ay+2*a3.ay+a4.ay)/6*dt;
+  x+=vx*dt;y+=vy*dt;t+=dt;pts.push({x,y});
+  if(vx<0.05||x>400000)break;
+ }
+ return{pts,vx,vy};
+}
+// Height at which the drag-affected path crosses level h; integrates inline and exits as soon as it crosses.
+function dragImpact(v,thDeg,k,wind,h,dt=0.02,maxT=120){
+ const th=rad(thDeg);let x=0,y=0,vx=v*Math.cos(th),vy=v*Math.sin(th),t=0,px=0,py=0,pvx=vx,pvy=vy,apex=0;
+ while(t<maxT){
+  const a1=dragAcc(vx,vy,k,wind),a2=dragAcc(vx+a1.ax*dt/2,vy+a1.ay*dt/2,k,wind),
+   a3=dragAcc(vx+a2.ax*dt/2,vy+a2.ay*dt/2,k,wind),a4=dragAcc(vx+a3.ax*dt,vy+a3.ay*dt,k,wind);
+  px=x;py=y;pvx=vx;pvy=vy;
+  vx+=(a1.ax+2*a2.ax+2*a3.ax+a4.ax)/6*dt;vy+=(a1.ay+2*a2.ay+2*a3.ay+a4.ay)/6*dt;
+  x+=vx*dt;y+=vy*dt;t+=dt;apex=Math.max(apex,y);
+  if((py<h&&y>=h)||(py>h&&y<=h)){const f=(h-py)/((y-py)||1e-9);
+   return{x:px+f*(x-px),t:t-dt+f*dt,apex,reached:true,vx:pvx+f*(vx-pvx),vy:pvy+f*(vy-pvy)}}
+  if(vx<0.05||x>400000)break;
+ }
+ return{x,apex,reached:false,vx,vy};
+}
+// Scan + bisection for the launch angle(s) that land a drag-affected shot on target at distance d, height h.
+// Scanned at 0.5° resolution (not 1°) because the flat-shot solution for many weapons falls under 1°.
+function solveDrag(v,d,h,k,wind){
+ const f=th=>dragImpact(v,th,k,wind,h).x-d;
+ const angles=[];for(let th=0.1;th<90;th+=0.5)angles.push(th);angles.push(89.9);
+ let prev=f(angles[0]),results=[];
+ for(let i=1;i<angles.length;i++){const cur=f(angles[i]);
+  if((prev<0)!==(cur<0))results.push([angles[i-1],angles[i]]);
+  prev=cur;if(results.length>=2)break}
+ const refine=([a,b])=>{let fa=f(a);for(let i=0;i<24;i++){const m=(a+b)/2,fm=f(m);if((fa<0)===(fm<0)){a=m;fa=fm}else b=m}return(a+b)/2};
+ if(!results.length)return null;
+ const low=refine(results[0]),high=results[1]?refine(results[1]):low;
+ return{low,high};
+}
+
+// ---------- UI helpers ----------
+const $=id=>document.getElementById(id);
+let unit="metric";
+const FT=0.3048; // 1 ft in m
+const toSI=(v,imp)=>imp?v*FT:v, fromSI=(v,imp)=>imp?v/FT:v;
+const fmtD=m=>{if(unit==="imperial"){const ft=m/FT;return ft<5280?ft.toFixed(0)+" ft":(ft/5280).toFixed(2)+" mi"}
+ return m<1000?m.toFixed(0)+" m":(m/1000).toFixed(2)+" km"};
+const fmtV=v=>unit==="imperial"?(v/FT).toFixed(0)+" ft/s":v.toFixed(0)+" m/s";
+const row=(a,b)=>`<div class="res"><span>${a}</span><b>${b}</b></div>`;
+function pt(p){const imp=unit==="imperial",lat=parseFloat($(p+"lat").value),lon=parseFloat($(p+"lon").value),
+ alt=toSI(parseFloat($(p+"alt").value)||0,imp);
+ return(isNaN(lat)||isNaN(lon)||Math.abs(lat)>90||Math.abs(lon)>180)?null:{lat,lon,alt}}
+let mine=[];try{mine=JSON.parse(localStorage.getItem("myWeapons")||"[]")}catch(e){}
+const all=()=>WEAPONS.concat(mine),norm=s=>s.toLowerCase().replace(/[^a-z0-9]/g,"");
+function fillCats(){const cur=$("cat").value;$("cat").innerHTML='<option value="">All categories</option>'+[...new Set(all().map(w=>w.c||"generic"))].map(c=>`<option>${c}</option>`).join("");$("cat").value=cur}
+function refreshList(){const c=$("cat").value;$("wlist").innerHTML=all().filter(w=>!c||(w.c||"generic")===c).map(w=>`<option value="${w.n}">${w.c||"generic"} ${w.k||""}</option>`).join("")}
+function findW(q){q=norm(q);if(!q)return null;const a=all(),al=w=>w.a||[];
+ return a.find(w=>norm(w.n)===q)||a.find(w=>al(w).some(x=>norm(x)===q))||
+  (q.length>=2?a.find(w=>norm(w.n).includes(q)||al(w).some(x=>norm(x).includes(q))):null)}
+function onName(){const q=$("wname").value,w=findW(q),st=$("wstat"),sv=$("wsave"),imp=unit==="imperial";
+ if(w){$("mv").value=fromSI(w.v,imp).toFixed(imp?0:0);$("mr").value=fromSI(w.r,imp).toFixed(0);
+  $("kcoef").value=CAT_K[w.c||"generic"]??1.5e-4;
+  st.textContent=`${w.n} · ${w.c||"generic"}${w.k?" · "+w.k:""}${w.o?" · "+w.o:""} · ${fmtV(w.v)} · ${fmtD(w.r)} · approximate figures, editable below`;sv.style.display="none"}
+ else{if(!$("kcoef").value)$("kcoef").value=1.5e-4;st.textContent=q?"Not found. Enter velocity and range below, then save it.":"";sv.style.display=q?"":"none"}
+ calc()}
+$("wname").oninput=onName;
+$("wsave").onclick=()=>{const n=$("wname").value.trim(),v=+$("mv").value,imp=unit==="imperial";if(!n||!(v>0))return;
+ mine.push({n,v:toSI(v,imp),r:toSI(+$("mr").value||0,imp),c:"custom"});try{localStorage.setItem("myWeapons",JSON.stringify(mine))}catch(e){}fillCats();refreshList();onName()};
+
+let lastResult=null;
+function calc(){
+ draw();const out=$("out"),s=pt("s"),t=pt("t"),imp=unit==="imperial",
+  v=toSI(+$("mv").value,imp),mr=toSI(+$("mr").value||0,imp),useDrag=$("drag").checked,
+  k=+$("kcoef").value||1.5e-4,wind=toSI(+$("wind").value||0,imp);
+ if(!s||!t){out.innerHTML='<p class="mut">Click the map to place the shooter, then the target.</p>';chart(null);lastResult=null;return}
+ const d=dist(s,t),az=bearing(s,t),h=t.alt-s.alt;
+ let html=row("Ground distance",fmtD(d))+row("Azimuth",`${az.toFixed(2)}° · ${(az*6400/360).toFixed(0)} mil`)+row("Height difference",fmtD(h));
+ if(d<1){out.innerHTML=html+'<p class="warn">Points are too close together.</p>';chart(null);lastResult=null;return}
+ if(!(v>0)){out.innerHTML=html+'<p class="mut">Select or type a weapon above to compute elevation and time of flight.</p>';chart(null);
+  lastResult={s,t,d,az,h};return}
+ const a=useDrag?solveDrag(v,d,h,k,wind):solveEl(v,d,h);
+ if(!a){const maxR=useDrag?null:v*v/G;
+  out.innerHTML=html+`<p class="warn">Out of reach${maxR?` — drag-free max range at ${fmtV(v)} is ${fmtD(maxR)}`:" for this muzzle velocity and angle range"}.</p>`;
+  chart(null);lastResult=null;return}
+ const th=$("arc").value==="low"?a.low:a.high,alt=th===a.low?a.high:a.low,
+  p=useDrag?(()=>{const r=dragImpact(v,th,k,wind,h);return{tof:r.t||0,apex:r.apex,imp:Math.hypot(r.vx,r.vy)}})():prof(v,th,d);
+ html+=row("Elevation",`${th.toFixed(2)}° · ${(th*6400/360).toFixed(0)} mil`)+
+  row("Alt. solution",`${alt.toFixed(2)}°`)+
+  row("Time of flight",p.tof.toFixed(2)+" s")+row("Apex above launch",fmtD(p.apex))+row("Impact speed",fmtV(p.imp));
+ if(mr&&d>mr)html+='<p class="warn">Target is beyond the weapon\'s rated maximum range.</p>';
+ else if(!useDrag&&mr&&v*v/G>1.5*mr)html+='<p class="warn">Drag-free model overestimates range for this weapon; tick "Include approximate air drag" for a closer estimate, or treat angles as indicative only.</p>';
+ out.innerHTML=html;
+ lastResult={s,t,d,az,h,v,th,alt,k,wind,useDrag,weapon:$("wname").value,tof:p.tof,apex:p.apex,impactSpeed:p.imp};
+ chart({v,th,d,h,p,useDrag,k,wind});
+}
+function chart(c){
+ const cv=$("chart"),x=cv.getContext("2d"),W=cv.width,H=cv.height;x.clearRect(0,0,W,H);if(!c)return;
+ const m=28,my=Math.max(c.p.apex,c.h,1)*1.15,sx=(W-m-8)/c.d,sy=(H-m-8)/my;
+ const X=u=>m+u*sx,Y=u=>H-m-u*sy;
+ x.strokeStyle="#2b3828";x.beginPath();x.moveTo(m,8);x.lineTo(m,H-m);x.lineTo(W-8,H-m);x.stroke();
+ x.strokeStyle="#c9b458";x.lineWidth=2;x.beginPath();
+ if(c.useDrag){const r=dragPath(c.v,c.th,c.k,c.wind);
+  r.pts.forEach((p,i)=>{if(p.x>c.d*1.2)return;i?x.lineTo(X(p.x),Y(p.y)):x.moveTo(X(p.x),Y(p.y))})}
+ else{const t=Math.tan(rad(c.th)),cs=Math.cos(rad(c.th));
+  for(let i=0;i<=60;i++){const u=c.d*i/60,y=u*t-G*u*u/(2*c.v*c.v*cs*cs);i?x.lineTo(X(u),Y(y)):x.moveTo(X(u),Y(y))}}
+ x.stroke();x.lineWidth=1;x.fillStyle="#e0775f";x.beginPath();x.arc(X(c.d),Y(c.h),4,0,7);x.fill();
+ x.fillStyle="#8f9b86";x.font="10px system-ui";x.fillText("0",m-10,H-m+12);x.fillText(fmtD(c.d),W-50,H-m+12);x.fillText(fmtD(my/1.15),2,14);
+}
+
+// ---------- Offline map ----------
+const cv=$("map"),ctx=cv.getContext("2d");
+let Z=4,view={lat:22.5,lon:79},ox=0,oy=0,W=0,H=0,mouse=null;
+const cache=new Map(),proj=(lat,lon,ws)=>({x:(lon+180)/360*ws,y:(0.5-Math.log(Math.tan(Math.PI/4+rad(lat)/2))/(2*Math.PI))*ws}),
+ unp=(x,y,ws)=>({lon:x/ws*360-180,lat:deg(Math.atan(Math.sinh(Math.PI-2*Math.PI*y/ws)))});
+const ESRI="https://server.arcgisonline.com/ArcGIS/rest/services/",
+ LAYERS={esri_st:ESRI+"World_Street_Map/MapServer/tile/{z}/{y}/{x}",esri_topo:ESRI+"World_Topo_Map/MapServer/tile/{z}/{y}/{x}",esri_img:ESRI+"World_Imagery/MapServer/tile/{z}/{y}/{x}",osm:"https://tile.openstreetmap.org/{z}/{x}/{y}.png",local:"tiles/{z}/{x}/{y}.png"},
+ ATTR={esri_st:"Tiles © Esri",esri_topo:"Tiles © Esri",esri_img:"Imagery © Esri, Maxar, Earthstar",osm:"© OpenStreetMap contributors",local:"Offline tiles"};
+let layer="esri_st";
+const tUrl=(L,z,x,y)=>LAYERS[L].replace("{z}",z).replace("{x}",x).replace("{y}",y);
+const DB=new Promise(res=>{try{const r=indexedDB.open("tiles",1);r.onupgradeneeded=()=>r.result.createObjectStore("t");r.onsuccess=()=>res(r.result);r.onerror=()=>res(null)}catch(e){res(null)}});
+const dbGet=async k=>{const d=await DB;return d?new Promise(r=>{try{const q=d.transaction("t").objectStore("t").get(k);q.onsuccess=()=>r(q.result);q.onerror=()=>r(null)}catch(e){r(null)}}):null};
+const dbPut=async(k,v)=>{const d=await DB;if(d)try{d.transaction("t","readwrite").objectStore("t").put(v,k)}catch(e){}};
+function tile(z,x,y){const L=layer,k=L+"/"+z+"/"+x+"/"+y;let i=cache.get(k);
+ if(!i){if(cache.size>800)cache.clear();i=new Image();cache.set(k,i);i.onload=()=>requestAnimationFrame(draw);
+  const u=tUrl(L,z,x,y);
+  dbGet(k).then(b=>{if(b){i.src=URL.createObjectURL(b);return}
+   if(L==="local"){i.src=u;return}
+   if(!navigator.onLine)return;
+   fetch(u).then(r=>r.ok?r.blob():Promise.reject()).then(b=>{dbPut(k,b);i.src=URL.createObjectURL(b)}).catch(()=>{i.src=u})})}
+ return i}
+function resize(){const d=devicePixelRatio||1;W=cv.clientWidth;H=cv.clientHeight;cv.width=W*d;cv.height=H*d;ctx.setTransform(d,0,0,d,0,0);draw()}
+function scr(lat,lon){const p=proj(lat,lon,256*2**Z);return{x:p.x-ox,y:p.y-oy}}
+function draw(){
+ const ws=256*2**Z,n=2**Z,c=proj(view.lat,view.lon,ws);ox=c.x-W/2;oy=c.y-H/2;
+ ctx.fillStyle="#0c110b";ctx.fillRect(0,0,W,H);
+ for(let ty=Math.floor(oy/256);ty<=Math.floor((oy+H)/256);ty++)for(let tx=Math.floor(ox/256);tx<=Math.floor((ox+W)/256);tx++){
+  if(ty<0||ty>=n)continue;const im=tile(Z,((tx%n)+n)%n,ty);if(im.complete&&im.naturalWidth)ctx.drawImage(im,tx*256-ox,ty*256-oy,256,256)}
+ // graticule
+ const step=Z<5?5:Z<7?2:Z<9?1:Z<11?.25:Z<13?.1:.01,tl=unp(ox,oy,ws),br=unp(ox+W,oy+H,ws),gr=layer==="local"||!navigator.onLine;
+ ctx.lineWidth=1;ctx.font="10px system-ui";ctx.fillStyle="#5d6b55";ctx.strokeStyle="#ffffff14";ctx.beginPath();
+ for(let lo=Math.ceil(tl.lon/step)*step;gr&&lo<=br.lon;lo+=step){const x=scr(0,lo).x;ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.fillText(lo.toFixed(2).replace(/\.?0+$/,"")+"°E",x+3,H-4)}
+ for(let la=Math.ceil(br.lat/step)*step;gr&&la<=tl.lat;la+=step){const y=scr(la,0).y;ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.fillText(la.toFixed(2).replace(/\.?0+$/,"")+"°N",3,y-3)}
+ ctx.stroke();
+ // reference cities
+ if(Z>=4&&gr)CITIES.forEach(([nm,la,lo])=>{const p=scr(la,lo);ctx.fillStyle="#8f9b86";ctx.fillRect(p.x-2,p.y-2,4,4);ctx.font="11px system-ui";ctx.fillText(nm,p.x+6,p.y+4)});
+ // points
+ const s=pt("s"),t=pt("t"),ps=s&&scr(s.lat,s.lon),pt2=t&&scr(t.lat,t.lon);
+ if(ps&&pt2){ctx.strokeStyle="#c9b458";ctx.setLineDash([6,5]);ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(ps.x,ps.y);ctx.lineTo(pt2.x,pt2.y);ctx.stroke();ctx.setLineDash([])}
+ const mk=(p,col,lbl)=>{if(!p)return;ctx.fillStyle=col;ctx.strokeStyle="#000";ctx.lineWidth=2;ctx.beginPath();ctx.arc(p.x,p.y,8,0,7);ctx.fill();ctx.stroke();ctx.fillStyle="#fff";ctx.font="bold 12px system-ui";ctx.fillText(lbl,p.x+12,p.y-8)};
+ mk(ps,"#4fa3d9","Shooter");mk(pt2,"#e0775f","Target");
+ $("hud").textContent=`z${Z} · ${ATTR[layer]}`+(mouse?` · ${mouse.lat.toFixed(4)}, ${mouse.lon.toFixed(4)}`:"");
+}
+let drag=null;
+cv.onpointerdown=e=>{cv.setPointerCapture(e.pointerId);drag={x:e.clientX,y:e.clientY,c:proj(view.lat,view.lon,256*2**Z),moved:0}};
+cv.onpointermove=e=>{const r=cv.getBoundingClientRect();mouse=unp(e.clientX-r.left+ox,e.clientY-r.top+oy,256*2**Z);
+ if(drag){const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.moved=Math.max(drag.moved,Math.hypot(dx,dy));
+  if(drag.moved>4)view=unp(drag.c.x-dx,drag.c.y-dy,256*2**Z)}draw()};
+cv.onpointerup=e=>{if(drag&&drag.moved<=4){const r=cv.getBoundingClientRect(),ll=unp(e.clientX-r.left+ox,e.clientY-r.top+oy,256*2**Z),m=document.querySelector("input[name=mode]:checked").value;
+  $(m+"lat").value=ll.lat.toFixed(5);$(m+"lon").value=ll.lon.toFixed(5);
+  if(m==="s")document.querySelector("input[name=mode][value=t]").checked=true;calc()}drag=null};
+function zoomAt(dz,px=W/2,py=H/2){const ll=unp(px+ox,py+oy,256*2**Z);Z=Math.max(3,Math.min(18,Z+dz));const ws=256*2**Z,p=proj(ll.lat,ll.lon,ws);view=unp(p.x-px+W/2,p.y-py+H/2,ws);draw()}
+cv.onwheel=e=>{e.preventDefault();const r=cv.getBoundingClientRect();zoomAt(e.deltaY<0?1:-1,e.clientX-r.left,e.clientY-r.top)};
+$("zi").onclick=()=>zoomAt(1);$("zo").onclick=()=>zoomAt(-1);
+$("clear").onclick=()=>{["slat","slon","tlat","tlon"].forEach(i=>$(i).value="");document.querySelector("input[name=mode][value=s]").checked=true;calc()};
+["mv","mr","slat","slon","salt","tlat","tlon","talt","arc","drag","wind","kcoef"].forEach(i=>$(i).oninput=calc);
+
+// ---------- Units ----------
+function relabel(){const imp=unit==="imperial";
+ $("lblMv").textContent=`Muzzle velocity (${imp?"ft/s":"m/s"})`;
+ $("lblMr").textContent=`Rated / effective range (${imp?"ft":"m"})`;
+ $("lblS").textContent=`Shooter lat / lon / alt (${imp?"ft":"m"})`;
+ $("lblT").textContent=`Target lat / lon / alt (${imp?"ft":"m"})`;
+ $("lblWind").textContent=`Wind along path (${imp?"ft/s":"m/s"}, + tailwind)`;
+}
+$("unit").onchange=e=>{const old=unit;unit=e.target.value;const o=old==="imperial",ni=unit==="imperial";
+ ["mv","wind"].forEach(id=>{const el=$(id);if(el.value==="")return;el.value=fromSI(toSI(+el.value,o),ni).toFixed(2)});
+ ["mr","salt","talt"].forEach(id=>{const el=$(id);if(el.value==="")return;el.value=fromSI(toSI(+el.value,o),ni).toFixed(0)});
+ relabel();calc()};
+relabel();
+
+// ---------- Geolocation & auto-altitude (both need the device/network; fine offline too if device supports GPS) ----------
+$("geoBtn").onclick=()=>{
+ if(!navigator.geolocation){alert("Geolocation isn't available in this browser.");return}
+ $("geoBtn").textContent="Locating…";
+ navigator.geolocation.getCurrentPosition(p=>{
+  $("slat").value=p.coords.latitude.toFixed(5);$("slon").value=p.coords.longitude.toFixed(5);
+  if(p.coords.altitude!=null)$("salt").value=fromSI(p.coords.altitude,unit==="imperial").toFixed(0);
+  view={lat:p.coords.latitude,lon:p.coords.longitude};Z=Math.max(Z,12);
+  document.querySelector("input[name=mode][value=t]").checked=true;
+  $("geoBtn").textContent="📍 My location → shooter";calc()},
+ ()=>{alert("Couldn't get your location — check permissions.");$("geoBtn").textContent="📍 My location → shooter"},
+ {enableHighAccuracy:true,timeout:10000});
+};
+$("altBtn").onclick=async()=>{
+ const s=pt("s"),t=pt("t");if(!s&&!t){alert("Set the shooter and/or target point first.");return}
+ if(!navigator.onLine){alert("Altitude lookup needs an internet connection.");return}
+ $("altBtn").textContent="Fetching…";
+ try{
+  const locs=[s,t].filter(Boolean).map(p=>`${p.lat},${p.lon}`).join("|");
+  const r=await fetch("https://api.open-elevation.com/api/v1/lookup?locations="+encodeURIComponent(locs));
+  const j=await r.json();const imp=unit==="imperial";let i=0;
+  if(s)$("salt").value=fromSI(j.results[i++].elevation,imp).toFixed(0);
+  if(t)$("talt").value=fromSI(j.results[i++].elevation,imp).toFixed(0);
+  calc();
+ }catch(e){alert("Altitude service didn't respond — enter altitude manually.")}
+ $("altBtn").textContent="⛰ Fetch altitudes (online)";
+};
+
+// ---------- History ----------
+let hist=[];try{hist=JSON.parse(localStorage.getItem("calcHistory")||"[]")}catch(e){}
+function renderHist(){const box=$("hist");
+ if(!hist.length){box.innerHTML='<small class="mut">Saved calculations appear here.</small>';return}
+ box.innerHTML=hist.slice().reverse().map((h,ri)=>{const i=hist.length-1-ri;
+  return `<div class="res" style="cursor:pointer" data-i="${i}"><span>${h.weapon||"Measurement"} · ${fmtD(h.d)}</span><b>✕</b></div>`}).join("");
+ [...box.children].forEach(el=>{
+  el.onclick=ev=>{const i=+el.dataset.i;
+   if(ev.target.textContent==="✕"){hist.splice(i,1);try{localStorage.setItem("calcHistory",JSON.stringify(hist))}catch(e){}renderHist();return}
+   const h=hist[i];$("slat").value=h.s.lat;$("slon").value=h.s.lon;$("salt").value=fromSI(h.s.alt,unit==="imperial").toFixed(0);
+   $("tlat").value=h.t.lat;$("tlon").value=h.t.lon;$("talt").value=fromSI(h.t.alt,unit==="imperial").toFixed(0);
+   if(h.weapon){$("wname").value=h.weapon;onName()}
+   view={lat:(h.s.lat+h.t.lat)/2,lon:(h.s.lon+h.t.lon)/2};calc()};
+ });
+}
+$("saveHist").onclick=()=>{if(!lastResult){alert("Set the shooter and target first.");return}
+ hist.push(lastResult);if(hist.length>20)hist.shift();
+ try{localStorage.setItem("calcHistory",JSON.stringify(hist))}catch(e){}renderHist()};
+renderHist();
+$("dl").onclick=async()=>{
+ if(layer==="local"||!navigator.onLine){alert("Go online and pick Streets / Terrain / Satellite first.");return}
+ const L=layer,jobs=[];
+ for(let z=Z;z<=Math.min(18,Z+3);z++){const ws=256*2**z,c=proj(view.lat,view.lon,ws),n=2**z;
+  for(let ty=Math.floor((c.y-H/2)/256);ty<=Math.floor((c.y+H/2)/256);ty++)for(let tx=Math.floor((c.x-W/2)/256);tx<=Math.floor((c.x+W/2)/256);tx++)if(ty>=0&&ty<n)jobs.push([z,((tx%n)+n)%n,ty])}
+ if(jobs.length>1500){alert(`Too many tiles (${jobs.length}). Zoom in a little first.`);return}
+ let done=0;
+ for(let i=0;i<jobs.length;i+=6)await Promise.all(jobs.slice(i,i+6).map(async([z,x,y])=>{
+  const k=L+"/"+z+"/"+x+"/"+y;if(!(await dbGet(k))){try{const r=await fetch(tUrl(L,z,x,y));if(r.ok)await dbPut(k,await r.blob())}catch(e){}}
+  $("cnt").textContent=`Saving ${++done}/${jobs.length}…`}));
+ $("cnt").textContent=`Saved ${jobs.length} tiles. This area now works offline.`;cache.clear();draw()};
+addEventListener("online",()=>{cache.clear();draw()});addEventListener("offline",draw);
+$("layer").onchange=e=>{layer=e.target.value;draw()};
+$("q").onkeydown=async e=>{if(e.key!=="Enter")return;const q=e.target.value.trim();if(!q)return;
+ try{const r=await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=in&q="+encodeURIComponent(q)),j=await r.json();
+  if(!j[0]){alert("Place not found");return}view={lat:+j[0].lat,lon:+j[0].lon};Z=Math.max(Z,11);draw()}
+ catch(err){alert("Search needs an internet connection.")}};
+addEventListener("resize",resize);fillCats();refreshList();$("cat").onchange=refreshList;$("wname").value="Generic 5.56 rifle";onName();resize();
+</script></body></html>
